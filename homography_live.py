@@ -11,13 +11,12 @@ MIN_MATCH_COUNT = 10
 
 reference_image = cv2.imread('dog.jpg')
 
-# Initiate SIFT detector
-#sift = cv2.xfeatures2d.SIFT_create()
+cv2.namedWindow("combined") 
+
 
 #Init ORB detector and feature matcher
 cv2.ocl.setUseOpenCL(False) #bugfix
 orb = cv2.ORB_create()
-
 bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) #create BFMatcher object
 
 def compute_matches(img1, img2):
@@ -47,7 +46,10 @@ def compute_matches(img1, img2):
                        matchesMask = matchesMask, # draw only inliers
                        flags = 2)
     img3 = cv2.drawMatches(img1,kp1,img2,kp2,matches,None,**draw_params)
-    plt.imshow(img3, 'gray'),plt.show()
+    cv2.imshow('combined',img3)
+    cv2.waitKey(30)
+    #   plt.ion(), plt.show(), plt.pause(0.0001)
+
 
 
 def show_webcam(mirror=False):
@@ -65,8 +67,6 @@ def show_webcam(mirror=False):
         if mirror: 
             camera_image = cv2.flip(camera_image, 1)
         compute_matches(reference_image,camera_image)
-        if cv2.waitKey(1) == 27: 
-            break  # esc to quit
     cv2.destroyAllWindows()
 
 def main():
