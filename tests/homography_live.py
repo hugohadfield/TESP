@@ -13,7 +13,6 @@ reference_image = cv2.imread('dog.jpg')
 
 cv2.namedWindow("combined") 
 
-
 #Init ORB detector and feature matcher
 cv2.ocl.setUseOpenCL(False) #bugfix
 orb = cv2.ORB_create()
