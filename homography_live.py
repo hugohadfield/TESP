@@ -46,7 +46,7 @@ def compute_matches(img1, img2):
                        singlePointColor = None,
                        matchesMask = matchesMask, # draw only inliers
                        flags = 2)
-    img3 = cv2.drawMatches(img1,kp1,img2,kp2,good,None,**draw_params)
+    img3 = cv2.drawMatches(img1,kp1,img2,kp2,matches,None,**draw_params)
     plt.imshow(img3, 'gray'),plt.show()
 
 
