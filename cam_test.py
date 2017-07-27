@@ -6,7 +6,7 @@ via the new Pythonic cv2 interface.  Press <esc> to quit.
 import cv2
 
 def show_webcam(mirror=False):
-	cam = cv2.VideoCapture(0)
+	cam = cv2.VideoCapture(1)
 	while True:
 		ret_val, img = cam.read()
 		if mirror: 
