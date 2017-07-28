@@ -104,11 +104,29 @@ def compute_homography(matches, background_kp, camera_kp):
     return homography_mapping, matchesMask
 
 def magnify_area(background_image, center_point, magnification_scale, rotation_angle_degrees):
-    compound_image = background_image.copy()
+    # Build a binary mask of the area of interest
+    circle_mask = np.zeros((background_height,background_width), np.uint8)
+    cv2.circle(circle_mask,tuple(center_point),200,1,thickness=-1)
+    # Use the mask to cut out the area that we need
+    roi_image = cv2.bitwise_and(background_image, background_image, mask=circle_mask)
+    roi_image = cv2.resize(roi_image,None,fx=magnification_scale, fy=magnification_scale, interpolation = cv2.INTER_CUBIC)
+    #cv2.imshow('Debug2',roi_image)
+    new_centre = [magnification_scale*p for p in center_point]
+    translation_vector = [0,0]
+    for i in range(2):
+        translation_vector[i] = center_point[i] - new_centre[i]
+    M = np.float32([[1,0,translation_vector[0]],[0,1,translation_vector[1]]])
+    rows,cols,d = roi_image.shape
+    dst = cv2.warpAffine(roi_image,M,(cols,rows))
+    moved_and_cropped = dst[0:background_height, 0:background_width, :].copy()
+    moved_and_cropped = cv2.bitwise_and(moved_and_cropped, moved_and_cropped, mask=circle_mask)
+
+    # Invert the mask to show the area that is kept
+    circle_mask = 1-circle_mask
+    compound_image = cv2.bitwise_and(background_image, background_image, mask=circle_mask)
+    compound_image = cv2.bitwise_or(compound_image, moved_and_cropped)
+    cv2.circle(compound_image,tuple(center_point),200,1,thickness=15)
     return compound_image
-
-
-
 
 def get_central_camera_point(homography_mapping):
     src = np.float32([ [round(CAM_WIDTH/2),round(CAM_HEIGHT/2)] ]).reshape(-1,1,2)
@@ -191,6 +209,7 @@ if __name__ == '__main__':
     # Create an opencv window to display the projection into
     cv2.namedWindow("Projector", cv2.WINDOW_NORMAL) 
     cv2.namedWindow("Debug", cv2.WINDOW_NORMAL) 
+    #cv2.namedWindow("Debug2", cv2.WINDOW_NORMAL) 
 
     ######### Main Loop #########
     while True:
@@ -206,7 +225,6 @@ if __name__ == '__main__':
         show_matches(background_image, camera_image, background_kp, camera_kp, homography_mapping)
 
         # If it is square update our position to the new found position, else keep the old one
-        
         if test_for_good_lock(homography_mapping, background_width, background_height):
             # Define a point about which we will magnify the image and the rotation angle
             smooth_matrix(homography_mapping)
@@ -215,16 +233,12 @@ if __name__ == '__main__':
         else:
             new_point = [p for p in tracked_centre_point]
         smooth_centre_motion(new_point, delta_t)
-        print(tracked_velocity, tracked_centre_point)
+        #print(tracked_velocity, tracked_centre_point)
 
         # Cut that area out from the original image, magnify it and crop it
-        center_point = []
-        magnification_scale = []
+        magnification_scale = 2
         rotation_angle_degrees = []
-        compound_image = magnify_area(background_image, center_point, magnification_scale, rotation_angle_degrees)
-
-        #cv2.circle(compound_image, tuple(new_point), 30, (0,0,255), -1)
-        cv2.circle(compound_image, tuple(tracked_centre_point), 150, (0,0,0), 15)
+        compound_image = magnify_area(background_image, tracked_centre_point, magnification_scale, rotation_angle_degrees)
 
         # Finish up and project it!
         cv2.imshow('Projector',compound_image)
