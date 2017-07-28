@@ -203,16 +203,20 @@ if __name__ == '__main__':
     # Load the background image and compute markers on it
     background_image = cv2.imread(background_file_name)
     h,w,d = background_image.shape
-    background_kp = orb.detect(background_image, None)
-    background_kp, background_des = orb.compute(background_image, background_kp)
 
     # Create an opencv window to display the projection into
     cv2.namedWindow("Projector", cv2.WINDOW_NORMAL) 
     cv2.namedWindow("Debug", cv2.WINDOW_NORMAL) 
     #cv2.namedWindow("Debug2", cv2.WINDOW_NORMAL) 
 
+    compound_image = background_image.copy()
+
     ######### Main Loop #########
     while True:
+
+        background_kp = orb.detect(compound_image, None)
+        background_kp, background_des = orb.compute(compound_image, background_kp)
+
         # Get an image from the camera
         ret_val, camera_image = cam.read()
 
@@ -222,7 +226,7 @@ if __name__ == '__main__':
             cv2.waitKey(30)
             continue
         homography_mapping, matchesMask = compute_homography(matches, background_kp, camera_kp)
-        show_matches(background_image, camera_image, background_kp, camera_kp, homography_mapping)
+        show_matches(compound_image, camera_image, background_kp, camera_kp, homography_mapping)
 
         # If it is square update our position to the new found position, else keep the old one
         if test_for_good_lock(homography_mapping, background_width, background_height):
