@@ -4,7 +4,7 @@ import cv2
 from numpy.linalg import inv
 
 ######### Parameters #########
-MIN_MATCH_COUNT = 10
+MIN_MATCH_COUNT = 6
 MAX_MATCH_COUNT = 11
 EXP_SMOOTHING_FACTOR = 0.5
 MATRIX_EXP_SMOOTHING_FACTOR = 0.5
@@ -15,16 +15,23 @@ RANSAC_PARAMETER = 5.0
 #background_width = 1296
 background_height = 981 
 background_width = 1590
+#background_height = 623 
+#background_width = 1146
 delta_t = 1
 background_file_name = 'wheresWally3.jpg'
 magnifying_file_name = 'magnifying_glass.png'
+
+SIFT_FLAG = False
+FLANN_INDEX_KDTREE = 0
+index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 1)
+search_params = dict(checks = 50)
 
 ####### Globals #######
 CAM_WIDTH = 0
 CAM_HEIGHT = 0
 tracked_centre_point = [0,0]
 tracked_velocity = [0,0]
-smoothed_mapping = np.float32([[0, 0, 0],[0,0,0],[0,0,0]])
+smoothed_mapping = np.float32([[1, 0, 0],[0,1,0],[0,0,1]])
 
 ######### Function Definitions #########
 def init_webcam(mirror=False):
@@ -78,14 +85,23 @@ def show_matches(background_image, camera_image, background_kp, camera_kp, homog
 
 def compute_matches(background_des, camera_image):
     # find the keypoints and descriptors with ORB
-    camera_kp = orb.detect(camera_image, None)
+    if SIFT_FLAG: 
+        camera_kp = sift.detect(camera_image, None)
+    else:
+        camera_kp = orb.detect(camera_image, None)
     matches = []
     if len(camera_kp) > 0:
-        camera_kp, camera_des = orb.compute(camera_image, camera_kp)
-        # Match the descriptors between images
-        matches = bf.match(background_des, camera_des)
-        if len(matches) > MAX_MATCH_COUNT:
-            matches = sorted(matches, key = lambda x:x.distance)[0:MAX_MATCH_COUNT]
+        if SIFT_FLAG: 
+            camera_kp, camera_des = sift.compute(camera_image, camera_kp)
+            temp_matches  = flann.knnMatch(background_des,camera_des,k=2)
+            for m,n in temp_matches:
+                if m.distance < 0.7*n.distance:
+                    matches.append(m)
+        else:
+            camera_kp, camera_des = orb.compute(camera_image, camera_kp)
+            matches = bf.match(background_des, camera_des)
+            if len(matches) > MAX_MATCH_COUNT:
+                matches = sorted(matches, key = lambda x:x.distance)[0:MAX_MATCH_COUNT]
     return matches, camera_kp
 
 def compute_homography(matches, background_kp, camera_kp):
@@ -131,8 +147,6 @@ def magnify_area(background_image, center_point, magnification_scale, rotation_a
 def get_central_camera_point(homography_mapping):
     src = np.float32([ [round(CAM_WIDTH/2),round(CAM_HEIGHT/2)] ]).reshape(-1,1,2)
     m = cv2.invert(homography_mapping) 
-    #print(src)
-    #print(m)
     dst = cv2.perspectiveTransform( src, m[1])
     return dst
 
@@ -143,9 +157,7 @@ def test_for_good_lock(homography_mapping, background_height, background_width):
     if area > 100000:
         x,y,w,h = cv2.boundingRect(dst)
         metric = w*h
-        #print(area,metric)
         error_ratio = abs(metric - area) / area
-        #print(error_ratio)
         if error_ratio < 0.8:
             return True
     else:
@@ -195,17 +207,29 @@ if __name__ == '__main__':
     CAM_WIDTH = camera_width
     CAM_HEIGHT = camera_height
 
-    # Init ORB detector and feature matcher
-    cv2.ocl.setUseOpenCL(False) #bugfix
-    orb = cv2.ORB_create()
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) #create BFMatcher object
-
     # Load the background image and compute markers on it
     background_image = cv2.imread(background_file_name)
     h,w,d = background_image.shape
 
+    # Init ORB detector and feature matcher
+    cv2.ocl.setUseOpenCL(False) #bugfix
+    if SIFT_FLAG:
+        sift = cv2.xfeatures2d.SIFT_create(nfeatures=100)
+        background_sift = cv2.xfeatures2d.SIFT_create(nfeatures=2000)
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
+        print("About to compute")
+        temp_kp = background_sift.detect(background_image, None)
+        temp_kp, temp_des = background_sift.compute(background_image, temp_kp)
+        background_des = temp_des#[0:10000]
+        background_kp = temp_kp#[0:10000]
+        print("Computed features")
+    else:
+        orb = cv2.ORB_create(nfeatures=2000)
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) #create BFMatcher object
+
     # Create an opencv window to display the projection into
     cv2.namedWindow("Projector", cv2.WINDOW_NORMAL) 
+    cv2.imshow('Projector',background_image)
     cv2.namedWindow("Debug", cv2.WINDOW_NORMAL) 
     #cv2.namedWindow("Debug2", cv2.WINDOW_NORMAL) 
 
@@ -213,17 +237,19 @@ if __name__ == '__main__':
 
     ######### Main Loop #########
     while True:
-
-        background_kp = orb.detect(compound_image, None)
-        background_kp, background_des = orb.compute(compound_image, background_kp)
+        if not SIFT_FLAG:
+            orb2 = cv2.ORB_create(nfeatures=500)
+            background_kp = orb2.detect(compound_image, None)
+            background_kp, background_des = orb2.compute(compound_image, background_kp)
 
         # Get an image from the camera
         ret_val, camera_image = cam.read()
 
         # Detect the homography between the background image and the camera
         matches, camera_kp = compute_matches(background_des, camera_image)
-        if len(matches) < MIN_MATCH_COUNT:
+        if len(matches) <= MIN_MATCH_COUNT:
             cv2.waitKey(30)
+            print("FAIL matches")
             continue
         homography_mapping, matchesMask = compute_homography(matches, background_kp, camera_kp)
         show_matches(compound_image, camera_image, background_kp, camera_kp, homography_mapping)
@@ -236,8 +262,8 @@ if __name__ == '__main__':
             new_point = dst[0][0]
         else:
             new_point = [p for p in tracked_centre_point]
+            print("FAIL lock")
         smooth_centre_motion(new_point, delta_t)
-        #print(tracked_velocity, tracked_centre_point)
 
         # Cut that area out from the original image, magnify it and crop it
         magnification_scale = 2
