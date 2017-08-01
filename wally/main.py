@@ -2,6 +2,9 @@
 import numpy as np
 import cv2
 
+import threading
+from multiprocessing import Queue
+
 ######### Parameters #########
 MIN_MATCH_COUNT = 6
 MAX_MATCH_COUNT = 20
@@ -75,7 +78,7 @@ def show_webcam(mirror=False):
         compute_matches(reference_image,camera_image)
     cv2.destroyAllWindows()
 
-def show_matches(background_image, camera_image, background_kp, camera_kp, homography_mapping):
+def show_matches(background_image, camera_image, background_kp, camera_kp, homography_mapping, matchesMask, matches):
     h,w,d = background_image.shape
     pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
     dst = cv2.perspectiveTransform(pts,homography_mapping)
@@ -88,7 +91,7 @@ def show_matches(background_image, camera_image, background_kp, camera_kp, homog
     img3 = cv2.drawMatches(background_image,background_kp,camera_image,camera_kp,matches,None,**draw_params)
     cv2.imshow('Debug',img3)
 
-def compute_matches(background_des, camera_image):
+def compute_matches(background_des, camera_image, orb, bf):
     # find the keypoints and descriptors with ORB
     if SIFT_FLAG: 
         camera_kp = sift.detect(camera_image, None)
@@ -203,14 +206,10 @@ def smooth_centre_motion(measured_position, delta_t):
         tracked_centre_point[i] = new_point[i]
 
 
-if __name__ == '__main__':
 
-    ######### Initialisation #########
 
-    # Set up the camera
-    cam, camera_height, camera_width = init_webcam()
-    CAM_WIDTH = camera_width
-    CAM_HEIGHT = camera_height
+def main_loop(thread_num):
+    print('Worker: %s' % thread_num)
 
     # Load the background image and compute markers on it
     background_image = cv2.imread(background_file_name)
@@ -220,66 +219,88 @@ if __name__ == '__main__':
         background_image[cp[1]:cp[1]+h, cp[0]:cp[0]+w] = marker_image.copy()
     h,w,d = background_image.shape
 
-    # Init ORB detector and feature matcher
-    #cv2.ocl.setUseOpenCL(False) #bugfix
-    if SIFT_FLAG:
-        sift = cv2.xfeatures2d.SIFT_create(nfeatures=100)
-        background_sift = cv2.xfeatures2d.SIFT_create(nfeatures=2000)
-        flann = cv2.FlannBasedMatcher(index_params, search_params)
-        print("About to compute")
-        temp_kp = background_sift.detect(background_image, None)
-        temp_kp, temp_des = background_sift.compute(background_image, temp_kp)
-        background_des = temp_des#[0:10000]
-        background_kp = temp_kp#[0:10000]
-        print("Computed features")
-    else:
-        orb = cv2.ORB_create(nfeatures=500)
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) #create BFMatcher object
+    if thread_num == 0:
+        ######### Initialisation #########
+        # Set up the camera
+        cam, camera_height, camera_width = init_webcam()
+        CAM_WIDTH = camera_width
+        CAM_HEIGHT = camera_height
 
-    # Create an opencv window to display the projection into
-    cv2.namedWindow("Projector", cv2.WINDOW_NORMAL) 
-    cv2.imshow('Projector',background_image)
-    cv2.namedWindow("Debug", cv2.WINDOW_NORMAL) 
-    #cv2.namedWindow("Debug2", cv2.WINDOW_NORMAL) 
-
-    compound_image = background_image.copy()
-
-    ######### Main Loop #########
-    while True:
-        if not SIFT_FLAG:
-            orb2 = cv2.ORB_create(nfeatures=500)
-            background_kp = orb2.detect(compound_image, None)
-            background_kp, background_des = orb2.compute(compound_image, background_kp)
-
-        # Get an image from the camera
-        ret_val, camera_image = cam.read()
-
-        # Detect the homography between the background image and the camera
-        matches, camera_kp = compute_matches(background_des, camera_image)
-        if len(matches) <= MIN_MATCH_COUNT:
-            cv2.imshow('Projector',compound_image)
-            print("FAIL matches")
-            cv2.waitKey(10)
-            continue
-        homography_mapping, matchesMask = compute_homography(matches, background_kp, camera_kp)
-        show_matches(compound_image, camera_image, background_kp, camera_kp, homography_mapping)
-
-        # If it is square update our position to the new found position, else keep the old one
-        if test_for_good_lock(homography_mapping, background_width, background_height):
-            # Define a point about which we will magnify the image and the rotation angle
-            smooth_matrix(homography_mapping)
-            dst = get_central_camera_point(smoothed_mapping)
-            new_point = dst[0][0]
+        # Init ORB detector and feature matcher
+        #cv2.ocl.setUseOpenCL(False) #bugfix
+        if SIFT_FLAG:
+            sift = cv2.xfeatures2d.SIFT_create(nfeatures=100)
+            background_sift = cv2.xfeatures2d.SIFT_create(nfeatures=2000)
+            flann = cv2.FlannBasedMatcher(index_params, search_params)
+            print("About to compute")
+            temp_kp = background_sift.detect(background_image, None)
+            temp_kp, temp_des = background_sift.compute(background_image, temp_kp)
+            background_des = temp_des#[0:10000]
+            background_kp = temp_kp#[0:10000]
+            print("Computed features")
         else:
-            new_point = [p for p in tracked_centre_point]
-            print("FAIL lock")
-        smooth_centre_motion(new_point, delta_t)
+            orb = cv2.ORB_create(nfeatures=500)
+            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) #create BFMatcher object
 
-        # Cut that area out from the original image, magnify it and crop it
-        magnification_scale = 2
-        rotation_angle_degrees = []
-        compound_image = magnify_area(background_image, tracked_centre_point, magnification_scale, rotation_angle_degrees)
+        # Create an opencv window to display the projection into
+        cv2.namedWindow("Debug", cv2.WINDOW_NORMAL) 
+        #cv2.namedWindow("Debug2", cv2.WINDOW_NORMAL) 
 
-        # Finish up and project it!
-        cv2.imshow('Projector',compound_image)
-        cv2.waitKey(20)
+        compound_image = background_image.copy()
+
+        ######### Main Loop #########
+        while True:
+            if not SIFT_FLAG:
+                orb2 = cv2.ORB_create(nfeatures=500)
+                background_kp = orb2.detect(compound_image, None)
+                background_kp, background_des = orb2.compute(compound_image, background_kp)
+
+            # Get an image from the camera
+            ret_val, camera_image = cam.read()
+
+            # Detect the homography between the background image and the camera
+            matches, camera_kp = compute_matches(background_des, camera_image, orb, bf)
+            if len(matches) <= MIN_MATCH_COUNT:
+                cv2.imshow('Projector',compound_image)
+                print("FAIL matches")
+                cv2.waitKey(10)
+                continue
+            homography_mapping, matchesMask = compute_homography(matches, background_kp, camera_kp)
+            show_matches(compound_image, camera_image, background_kp, camera_kp, homography_mapping, matchesMask, matches)
+
+            # If it is square update our position to the new found position, else keep the old one
+            if test_for_good_lock(homography_mapping, background_width, background_height):
+                # Define a point about which we will magnify the image and the rotation angle
+                smooth_matrix(homography_mapping)
+                dst = get_central_camera_point(smoothed_mapping)
+                new_point = dst[0][0]
+            else:
+                new_point = [p for p in tracked_centre_point]
+                print("FAIL lock")
+            smooth_centre_motion(new_point, delta_t)
+
+            # Now we have the centre position send it over to the other thread
+
+        else:
+            cv2.namedWindow("Projector", cv2.WINDOW_NORMAL) 
+            cv2.imshow('Projector',background_image)
+            while True:
+                # Try and get the new centre position
+                centre_position = q.get()
+                q.task_done()
+
+                # Cut that area out from the original image, magnify it and crop it
+                magnification_scale = 2
+                rotation_angle_degrees = []
+                #Finish up and project it!
+                compound_image = magnify_area(background_image, centre_position, magnification_scale, rotation_angle_degrees)
+                cv2.imshow('Projector', compound_image)
+                cv2.waitKey(20)
+
+
+if __name__ == '__main__':
+    threads = []
+    for i in range(2):
+        t = threading.Thread(target=main_loop, args=(i,))
+        threads.append(t)
+        t.start()
