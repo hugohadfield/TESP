@@ -4,9 +4,9 @@ import cv2
 
 ######### Parameters #########
 MIN_MATCH_COUNT = 6
-MAX_MATCH_COUNT = 11
-EXP_SMOOTHING_FACTOR = 0.5
-MATRIX_EXP_SMOOTHING_FACTOR = 0.5
+MAX_MATCH_COUNT = 20
+EXP_SMOOTHING_FACTOR = 0.2
+MATRIX_EXP_SMOOTHING_FACTOR = 0.2
 RANSAC_PARAMETER = 5.0
 #background_height = 1126
 #background_width = 1772
@@ -19,6 +19,8 @@ background_width = 1590
 delta_t = 1
 background_file_name = 'wheresWally3.jpg'
 magnifying_file_name = 'magnifying_glass.png'
+marker_file_name = ["marker_one_small.png","marker_two_small.png","marker_three_small.png","marker_four_small.png"]
+marker_points = [[0,0],[0,background_height-100],[background_width-100,0],[background_width-100,background_height-100]]
 
 SIFT_FLAG = False
 FLANN_INDEX_KDTREE = 0
@@ -26,8 +28,8 @@ index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 1)
 search_params = dict(checks = 50)
 
 ####### Globals #######
-CAM_WIDTH = 0
-CAM_HEIGHT = 0
+CAM_WIDTH = 1280
+CAM_HEIGHT = 960
 tracked_centre_point = [0,0]
 tracked_velocity = [0,0]
 smoothed_mapping = np.float32([[1, 0, 0],[0,1,0],[0,0,1]])
@@ -37,8 +39,12 @@ def init_webcam(mirror=False):
     cam = []
     camera_height = []
     camera_width = []
-    try:
-        cam = cv2.VideoCapture(1)
+    cam = cv2.VideoCapture(1)
+    cam.set(cv2.CAP_PROP_FPS,50)
+    cam.set(cv2.CAP_PROP_EXPOSURE,10)
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH,CAM_WIDTH)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT,CAM_HEIGHT)
+    try:    
         ret_val, camera_image = cam.read()
         if len(camera_image) == 0:
             raise
@@ -132,7 +138,7 @@ def magnify_area(background_image, center_point, magnification_scale, rotation_a
         translation_vector[i] = center_point[i] - new_centre[i]
     M = np.float32([[1,0,translation_vector[0]],[0,1,translation_vector[1]]])
     rows,cols,d = roi_image.shape
-    dst = cv2.warpAffine(roi_image,M,(cols,rows))
+    dst = cv2.warpAffine(roi_image,M,(background_width,background_height))
     moved_and_cropped = dst[0:background_height, 0:background_width, :].copy()
     moved_and_cropped = cv2.bitwise_and(moved_and_cropped, moved_and_cropped, mask=circle_mask)
 
@@ -208,10 +214,14 @@ if __name__ == '__main__':
 
     # Load the background image and compute markers on it
     background_image = cv2.imread(background_file_name)
+    for marker_index,cp in enumerate(marker_points):
+        marker_image = cv2.imread(marker_file_name[marker_index])
+        h,w,d = marker_image.shape
+        background_image[cp[1]:cp[1]+h, cp[0]:cp[0]+w] = marker_image.copy()
     h,w,d = background_image.shape
 
     # Init ORB detector and feature matcher
-    cv2.ocl.setUseOpenCL(False) #bugfix
+    #cv2.ocl.setUseOpenCL(False) #bugfix
     if SIFT_FLAG:
         sift = cv2.xfeatures2d.SIFT_create(nfeatures=100)
         background_sift = cv2.xfeatures2d.SIFT_create(nfeatures=2000)
@@ -223,7 +233,7 @@ if __name__ == '__main__':
         background_kp = temp_kp#[0:10000]
         print("Computed features")
     else:
-        orb = cv2.ORB_create(nfeatures=2000)
+        orb = cv2.ORB_create(nfeatures=500)
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) #create BFMatcher object
 
     # Create an opencv window to display the projection into
@@ -247,8 +257,9 @@ if __name__ == '__main__':
         # Detect the homography between the background image and the camera
         matches, camera_kp = compute_matches(background_des, camera_image)
         if len(matches) <= MIN_MATCH_COUNT:
-            cv2.waitKey(30)
+            cv2.imshow('Projector',compound_image)
             print("FAIL matches")
+            cv2.waitKey(10)
             continue
         homography_mapping, matchesMask = compute_homography(matches, background_kp, camera_kp)
         show_matches(compound_image, camera_image, background_kp, camera_kp, homography_mapping)
@@ -271,4 +282,4 @@ if __name__ == '__main__':
 
         # Finish up and project it!
         cv2.imshow('Projector',compound_image)
-        cv2.waitKey(30)
+        cv2.waitKey(20)
