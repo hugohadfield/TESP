@@ -15,7 +15,7 @@ BOX_SMOOTHING_FACTOR = 0.9
 
 low_threshold_offset = 100
 
-LOCK_DURATION = 10
+LOCK_DURATION = 4
 
 MIRROR = True
 
@@ -24,7 +24,7 @@ RANSAC_PARAMETER = 5.0
 background_file_name = "square_white.png"
 
 MIN_MATCH_COUNT = 6
-MAX_MATCH_COUNT = 100
+MAX_MATCH_COUNT = 50
 
 def dotproduct(v1, v2):
   return sum((a*b) for a, b in zip(v1, v2))
@@ -55,7 +55,7 @@ def compute_homography(matches, background_kp, camera_kp):
         src_pts = np.float32([ background_kp[m.queryIdx].pt for m in matches ]).reshape(-1,1,2)
         dst_pts = np.float32([ camera_kp[m.trainIdx].pt for m in matches ]).reshape(-1,1,2)
         # Do RANSAC
-        homography_mapping, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,RANSAC_PARAMETER)
+        homography_mapping, mask = cv2.findHomography(dst_pts,src_pts, cv2.RANSAC,RANSAC_PARAMETER)
         matchesMask = mask.ravel().tolist()
     else:
         print("Not enough matches are found - %d/%d" % (len(matches),MIN_MATCH_COUNT))
@@ -120,7 +120,7 @@ def test_for_good_lock(homography_mapping, background_height, background_width):
     pts = np.float32([ [0,0],[0,background_height-1],[background_width-1,background_height-1],[background_width-1,0] ]).reshape(-1,1,2)
     dst = cv2.perspectiveTransform(pts,homography_mapping)
     area = cv2.contourArea(dst)
-    print(area)
+    #print(area)
     if area > 1000:
         x,y,w,h = cv2.boundingRect(dst)
         metric = w*h
@@ -145,14 +145,13 @@ def show_matches(background_image, camera_image, background_kp, camera_kp, homog
     cv2.imshow('debug',img3)
 
 
-def find_mapping_camera_to_projector(cam_object, image_mask):
+def find_mapping_camera_to_projector(cam_object, projected_image, image_mask):
     # Load the marker image file 
-    background_image = cv2.imread(background_file_name)
-    h,w,d = background_image.shape
-    orb = cv2.ORB_create(nfeatures=500)
+    h,w,d = projected_image.shape
+    orb = cv2.ORB_create(nfeatures=2000)
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True) #create BFMatcher object
-    background_kp = orb.detect(background_image, None)
-    background_kp, background_des = orb.compute(background_image, background_kp)
+    background_kp = orb.detect(projected_image, None)
+    background_kp, background_des = orb.compute(projected_image, background_kp)
 
     while True:
         ret_val, camera_image = cam.read()
@@ -161,8 +160,10 @@ def find_mapping_camera_to_projector(cam_object, image_mask):
         if len(matches) <= MIN_MATCH_COUNT:
             cv2.waitKey(30)
             continue
+        #print(matches)
         homography_mapping, matchesMask = compute_homography(matches, background_kp, camera_kp)
-        show_matches(background_image, roi_image, background_kp, camera_kp, homography_mapping, matchesMask, matches)
+        show_matches(projected_image, roi_image, background_kp, camera_kp, homography_mapping, matchesMask, matches)
+        cv2.waitKey(30)
         if test_for_good_lock(homography_mapping, h, w):
             return homography_mapping
 
@@ -257,9 +258,25 @@ smiley = cv2.imread('smiley.png')
 cv2.namedWindow("emoji", cv2.WINDOW_NORMAL) 
 cv2.namedWindow("debug", cv2.WINDOW_NORMAL) 
 #cv2.namedWindow("debug2", cv2.WINDOW_NORMAL) 
-cv2.imshow('emoji', 255*np.ones((CAM_WIDTH,CAM_HEIGHT,3),np.uint8))
 
 
+
+
+
+# Project the markers at a set size
+marker_image = cv2.imread(background_file_name)
+r = (CAM_HEIGHT/6.5) / marker_image.shape[1]
+dim = (int(CAM_HEIGHT/6.5), int(marker_image.shape[0] * r))
+resized = cv2.resize(marker_image, dim, interpolation = cv2.INTER_AREA)
+
+h,w,d = resized.shape
+offset_y = int(CAM_HEIGHT/2)
+offset_x = int(CAM_WIDTH/2) - w
+projected_image = 255*np.ones((CAM_HEIGHT,CAM_WIDTH,3),np.uint8)
+projected_image[offset_y:offset_y+h,offset_x:offset_x+w] = resized
+
+
+cv2.imshow('emoji', projected_image)
 
 # Find the box
 box = find_stable_box(LOCK_DURATION)
@@ -268,15 +285,17 @@ box = find_stable_box(LOCK_DURATION)
 mask = box_to_mask(box)
 
 # Use the mask to find the homography
-homography_mapping = find_mapping_camera_to_projector(cam, mask)
+homography_mapping = find_mapping_camera_to_projector(cam, projected_image, mask)
 
 cv2.namedWindow("hough", cv2.WINDOW_NORMAL) 
+cv2.namedWindow("debug", cv2.WINDOW_NORMAL) 
+
 
 while True:
     ret_val, camera_image = cam.read()
+    box = get_bounding_box(camera_image)
     #if MIRROR:
     #    camera_image = cv2.flip( camera_image, 1 )
-    box = get_bounding_box(camera_image)
     if box is not None:
         cv2.drawContours(camera_image,[box],0,(0,0,255),2)
     else:
@@ -284,9 +303,15 @@ while True:
 
     cv2.imshow('hough', camera_image)
     try:
-        cv2.imshow('emoji', map_emoji_to_camera(box, smiley) )
-        print("Error")
+        # map emoji to camera
+        camera_emoji = map_emoji_to_camera(box, smiley)
+        cv2.imshow('debug', camera_emoji)
+        # map camera to projector
+        projector_emoji = cv2.warpPerspective(camera_emoji,homography_mapping,(CAM_WIDTH,CAM_HEIGHT))  
+        print(projector_emoji.shape)
+        cv2.imshow('emoji',  projector_emoji)
     except:
-        cv2.imshow('emoji', np.ones((CAM_WIDTH,CAM_HEIGHT),np.uint8))
+        print("Error")
+        cv2.imshow('emoji', 255*np.ones((CAM_WIDTH,CAM_HEIGHT),np.uint8))
         pass
     cv2.waitKey(30)
