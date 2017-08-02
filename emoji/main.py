@@ -85,17 +85,22 @@ def init_webcam(mirror=True):
         camera_height,camera_width,d = camera_image.shape
     return cam, camera_height, camera_width
 
-def map_emoji_to_camera(corner_points, emoji_image):
-    xs = [ p[0] for p in corner_points ]
-    ys = [ p[1] for p in corner_points ]
-    x_max = max(xs)
-    x_min = min(xs)
-    y_max = max(ys)
-    y_min = min(ys)
-    h,w,d = emoji_image.shape
+def map_emoji_to_camera(corner_points, emoji_image, old_corner_points):
+    #xs = [ p[0] for p in corner_points ]
+    #ys = [ p[1] for p in corner_points ]
+    #x_max = max(xs)
+    #x_min = min(xs)
+    #y_max = max(ys)
+    #y_min = min(ys)
+    #h,w,d = emoji_image.shape
 
-    ordered_tracked = np.float32( [[x_min,y_min],[x_min,y_max],[x_max,y_max]] )
-    ordered_emoji = np.float32([[0,0],[0,h-1],[w-1,h-1]])
+    old_corner_points = smooth_box(BOX_SMOOTHING_FACTOR/4.0,old_corner_points,corner_points)
+    print(old_corner_points,corner_points)
+
+    ordered_tracked = np.float32( sort_box(old_corner_points)[0:3] )
+    ordered_emoji = [[0,0],[0,h-1],[w-1,h-1],[w-1,0]]
+    ordered_emoji = np.float32(sort_box(ordered_emoji)[0:3])
+
 
     affine_mapping = cv2.getAffineTransform(ordered_emoji,ordered_tracked)
     dst = cv2.warpAffine(emoji_image,affine_mapping,(CAM_WIDTH,CAM_HEIGHT),borderMode=cv2.BORDER_CONSTANT,borderValue=(255,255,255))
@@ -281,6 +286,8 @@ cv2.imshow('emoji', projected_image)
 # Find the box
 box = find_stable_box(LOCK_DURATION)
 
+old_corner_points = box[:]
+
 # Use the box to make a mask
 mask = box_to_mask(box)
 
@@ -304,11 +311,11 @@ while True:
     cv2.imshow('hough', camera_image)
     try:
         # map emoji to camera
-        camera_emoji = map_emoji_to_camera(box, smiley)
+        camera_emoji = map_emoji_to_camera(box, smiley, old_corner_points)
         cv2.imshow('debug', camera_emoji)
         # map camera to projector
         projector_emoji = cv2.warpPerspective(camera_emoji,homography_mapping,(CAM_WIDTH,CAM_HEIGHT))  
-        print(projector_emoji.shape)
+        #print(projector_emoji.shape)
         cv2.imshow('emoji',  projector_emoji)
     except:
         print("Error")
