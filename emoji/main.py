@@ -15,6 +15,8 @@ BOX_SMOOTHING_FACTOR = 0.9
 
 low_threshold_offset = 100
 
+LOCK_DURATION = 10
+
 MIRROR = True
 
 RANSAC_PARAMETER = 5.0
@@ -143,7 +145,7 @@ def show_matches(background_image, camera_image, background_kp, camera_kp, homog
     cv2.imshow('debug',img3)
 
 
-def find_mapping_camera_to_projector(cam_object):
+def find_mapping_camera_to_projector(cam_object, image_mask):
     # Load the marker image file 
     background_image = cv2.imread(background_file_name)
     h,w,d = background_image.shape
@@ -152,17 +154,17 @@ def find_mapping_camera_to_projector(cam_object):
     background_kp = orb.detect(background_image, None)
     background_kp, background_des = orb.compute(background_image, background_kp)
 
-    lock = False
-    while not lock:
+    while True:
         ret_val, camera_image = cam.read()
-        matches, camera_kp = compute_matches(background_des, camera_image, orb, bf)
+        roi_image = cv2.bitwise_and(camera_image, camera_image, mask=image_mask)
+        matches, camera_kp = compute_matches(background_des, roi_image, orb, bf)
         if len(matches) <= MIN_MATCH_COUNT:
             cv2.waitKey(30)
             continue
         homography_mapping, matchesMask = compute_homography(matches, background_kp, camera_kp)
-        show_matches(background_image, camera_image, background_kp, camera_kp, homography_mapping, matchesMask, matches)
-        test_for_good_lock(homography_mapping, h, w)
-        cv2.waitKey(30)
+        show_matches(background_image, roi_image, background_kp, camera_kp, homography_mapping, matchesMask, matches)
+        if test_for_good_lock(homography_mapping, h, w):
+            return homography_mapping
 
 def get_bounding_box(camera_image):
     temp_image = 255-camera_image
@@ -210,7 +212,6 @@ def sort_box(box_unsorted):
         return angle(subtract_points(box_point, centroid))
     return sorted(box_unsorted, key=angle_to_centroid)
 
-
 def smooth_box(BOX_SMOOTHING_FACTOR,box_old,box_unsorted):
     box_new = sort_box(box_unsorted)
     box_temp = []
@@ -219,7 +220,7 @@ def smooth_box(BOX_SMOOTHING_FACTOR,box_old,box_unsorted):
             box_old[p_index][1]*BOX_SMOOTHING_FACTOR + box_new[p_index][1]*(1-BOX_SMOOTHING_FACTOR) ])
     return box_temp
 
-def find_stable_box_mask(duration):
+def find_stable_box(duration):
     t = time.time()
     lock_aquired = False
     box_old = np.float32([[0,0],[0,0],[0,0],[0,0]])
@@ -240,6 +241,11 @@ def find_stable_box_mask(duration):
         if elapsed > duration:
             return box_old
 
+def box_to_mask(box):
+    blank_image = np.zeros((CAM_HEIGHT,CAM_WIDTH),np.uint8)
+    cv2.rectangle(blank_image , tuple(np.int0(box[0])), tuple(np.int0(box[2])), 255, -1)
+    #cv2.imshow('debug2',blank_image)
+    return blank_image
 
 
 # Get camera image
@@ -250,18 +256,22 @@ smiley = cv2.imread('smiley.png')
 
 cv2.namedWindow("emoji", cv2.WINDOW_NORMAL) 
 cv2.namedWindow("debug", cv2.WINDOW_NORMAL) 
+#cv2.namedWindow("debug2", cv2.WINDOW_NORMAL) 
 cv2.imshow('emoji', 255*np.ones((CAM_WIDTH,CAM_HEIGHT,3),np.uint8))
 
 
 
 # Find the box
-find_stable_box_mask(100)
+box = find_stable_box(LOCK_DURATION)
+
 # Use the box to make a mask
+mask = box_to_mask(box)
 
 # Use the mask to find the homography
+homography_mapping = find_mapping_camera_to_projector(cam, mask)
 
 cv2.namedWindow("hough", cv2.WINDOW_NORMAL) 
-#find_mapping_camera_to_projector(cam)
+
 while True:
     ret_val, camera_image = cam.read()
     #if MIRROR:
